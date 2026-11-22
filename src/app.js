@@ -1,5 +1,5 @@
 import express from 'express';
-import { DatabaseSync } from 'node:sqlite';
+import { createClient } from '@libsql/client';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import mammoth from 'mammoth';
@@ -37,17 +37,25 @@ function badRequest(message) {
   return Object.assign(new Error(message), { status: 400 });
 }
 
-// Copies the document's current state into a new revision.
-function snapshot(db, docId, authorId) {
-  db.prepare(`INSERT INTO revisions (document_id, author_id, version, title, content, created_at)
-    SELECT id, ?, version, title, content, updated_at FROM documents WHERE id = ?`).run(authorId, docId);
+// Thin async helpers over libSQL: a local SQLite file in dev/tests, Turso in production.
+function connect(url) {
+  const db = createClient({ url, authToken: process.env.TURSO_AUTH_TOKEN });
+  const run = (sql, ...args) => db.execute({ sql, args });
+  return {
+    raw: db,
+    run,
+    one: async (sql, ...args) => (await run(sql, ...args)).rows[0],
+    all: async (sql, ...args) => (await run(sql, ...args)).rows,
+  };
 }
 
-function initDb(path) {
-  const db = new DatabaseSync(path);
-  db.exec(`
-    PRAGMA foreign_keys = ON;
-    PRAGMA journal_mode = WAL;
+// Copies the document's current state into a new revision.
+const snapshot = (db, docId, authorId) => db.run(`INSERT INTO revisions (document_id, author_id, version, title, content, created_at)
+  SELECT id, ?, version, title, content, updated_at FROM documents WHERE id = ?`, authorId, docId);
+
+async function initDb(url) {
+  const db = connect(url);
+  await db.raw.executeMultiple(`
     CREATE TABLE IF NOT EXISTS users (
       id INTEGER PRIMARY KEY,
       email TEXT NOT NULL UNIQUE,
@@ -87,48 +95,46 @@ function initDb(path) {
   `);
 
   // Seed demo accounts on first boot so reviewers can test sharing immediately.
-  if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
-    const addUser = db.prepare('INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)');
+  if (!await db.one('SELECT 1 FROM users LIMIT 1')) {
     for (const [email, name] of [['alice@ajaia.test', 'Alice'], ['bob@ajaia.test', 'Bob'], ['carol@ajaia.test', 'Carol']]) {
-      addUser.run(email, name, hashPassword('demo1234'));
+      await db.run('INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)', email, name, hashPassword('demo1234'));
     }
     const now = new Date().toISOString();
-    const { lastInsertRowid } = db.prepare(
-      'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (1, ?, ?, ?, ?)'
-    ).run('Welcome to Ajaia Docs', '<h1>Welcome</h1><p>This document is owned by <strong>Alice</strong> and shared with Bob as an <em>editor</em>.</p><ul><li>Edit anything — changes autosave.</li><li>Use the toolbar for headings, lists and formatting.</li></ul>', now, now);
-    db.prepare("INSERT INTO shares (document_id, user_id, role) VALUES (?, 2, 'editor')").run(lastInsertRowid);
-    snapshot(db, lastInsertRowid, 1);
+    const { lastInsertRowid } = await db.run(
+      'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (1, ?, ?, ?, ?)',
+      'Welcome to Ajaia Docs', '<h1>Welcome</h1><p>This document is owned by <strong>Alice</strong> and shared with Bob as an <em>editor</em>.</p><ul><li>Edit anything — changes autosave.</li><li>Use the toolbar for headings, lists and formatting.</li></ul>', now, now);
+    await db.run("INSERT INTO shares (document_id, user_id, role) VALUES (?, 2, 'editor')", lastInsertRowid);
+    await snapshot(db, lastInsertRowid, 1);
   }
   return db;
 }
 
-export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
-  const db = initDb(dbPath);
+export async function createApp(url = process.env.TURSO_DATABASE_URL || `file:${process.env.DB_PATH || 'data.db'}`) {
+  const db = await initDb(url);
   const app = express();
   app.use(express.json({ limit: '2mb' }));
   app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
 
-  function auth(req, res, next) {
+  async function auth(req, res, next) {
     const token = /(?:^|;\s*)sid=([^;]+)/.exec(req.headers.cookie || '')?.[1];
-    const user = token && db.prepare(
-      'SELECT u.id, u.email, u.name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?'
-    ).get(token);
+    const user = token && await db.one(
+      'SELECT u.id, u.email, u.name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?', token);
     if (!user) return res.status(401).json({ error: 'Please sign in' });
     req.user = user;
     req.token = token;
     next();
   }
 
-  function roleFor(docId, userId) {
-    return db.prepare(`
+  async function roleFor(docId, userId) {
+    return (await db.one(`
       SELECT CASE WHEN d.owner_id = ? THEN 'owner' ELSE s.role END AS role
       FROM documents d LEFT JOIN shares s ON s.document_id = d.id AND s.user_id = ?
-      WHERE d.id = ?`).get(userId, userId, docId)?.role ?? null;
+      WHERE d.id = ?`, userId, userId, docId))?.role ?? null;
   }
 
   // 404 (not 403) when the user has no access at all, so document ids don't leak.
-  const access = (...allowed) => (req, res, next) => {
-    const role = roleFor(Number(req.params.id), req.user.id);
+  const access = (...allowed) => async (req, res, next) => {
+    const role = await roleFor(Number(req.params.id), req.user.id);
     if (!role) return res.status(404).json({ error: 'Document not found' });
     if (!allowed.includes(role)) return res.status(403).json({ error: `You have ${role} access to this document` });
     req.role = role;
@@ -141,46 +147,46 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
     return title.trim();
   }
 
-  function createDoc(ownerId, title, content = '') {
+  async function createDoc(ownerId, title, content = '') {
     content = clean(content);
     if (content.length > MAX_CONTENT) throw badRequest('Document is too large');
     const now = new Date().toISOString();
-    const { lastInsertRowid } = db.prepare(
-      'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(ownerId, title, content, now, now);
-    snapshot(db, lastInsertRowid, ownerId);
+    const { lastInsertRowid } = await db.run(
+      'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
+      ownerId, title, content, now, now);
+    await snapshot(db, lastInsertRowid, ownerId);
     return { id: Number(lastInsertRowid), title };
   }
 
   // Autosave fires every second while typing, so consecutive saves by the same author within
   // REVISION_WINDOW_MS update one revision instead of creating many. The creation revision
   // (version 1) is never merged, so the original/imported text is always restorable.
-  function recordRevision(docId, authorId, savedAt) {
-    const last = db.prepare('SELECT id, author_id, version, created_at FROM revisions WHERE document_id = ? ORDER BY id DESC LIMIT 1').get(docId);
+  async function recordRevision(docId, authorId, savedAt) {
+    const last = await db.one('SELECT id, author_id, version, created_at FROM revisions WHERE document_id = ? ORDER BY id DESC LIMIT 1', docId);
     if (last && last.version > 1 && last.author_id === authorId && Date.parse(savedAt) - Date.parse(last.created_at) < REVISION_WINDOW_MS) {
-      db.prepare(`UPDATE revisions SET (version, title, content) = (SELECT version, title, content FROM documents WHERE id = ?)
-        WHERE id = ?`).run(docId, last.id);
+      await db.run(`UPDATE revisions SET (version, title, content) = (SELECT version, title, content FROM documents WHERE id = ?)
+        WHERE id = ?`, docId, last.id);
     } else {
-      snapshot(db, docId, authorId);
+      await snapshot(db, docId, authorId);
     }
   }
 
   // --- auth ---
-  app.post('/api/login', (req, res) => {
+  app.post('/api/login', async (req, res) => {
     const { email, password } = req.body ?? {};
-    const user = typeof email === 'string' && db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim().toLowerCase());
+    const user = typeof email === 'string' && await db.one('SELECT * FROM users WHERE email = ?', email.trim().toLowerCase());
     if (!user || typeof password !== 'string' || !checkPassword(password, user.password_hash)) {
       return res.status(401).json({ error: 'Invalid email or password' });
     }
     const token = crypto.randomBytes(32).toString('hex');
-    db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, user.id, new Date().toISOString());
+    await db.run('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)', token, user.id, new Date().toISOString());
     const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
     res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`);
     res.json({ id: user.id, email: user.email, name: user.name });
   });
 
-  app.post('/api/logout', auth, (req, res) => {
-    db.prepare('DELETE FROM sessions WHERE token = ?').run(req.token);
+  app.post('/api/logout', auth, async (req, res) => {
+    await db.run('DELETE FROM sessions WHERE token = ?', req.token);
     res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
     res.json({ ok: true });
   });
@@ -188,18 +194,18 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
   app.get('/api/me', auth, (req, res) => res.json(req.user));
 
   // --- documents ---
-  app.get('/api/docs', auth, (req, res) => {
+  app.get('/api/docs', auth, async (req, res) => {
     res.json({
-      owned: db.prepare('SELECT id, title, updated_at FROM documents WHERE owner_id = ? ORDER BY updated_at DESC').all(req.user.id),
-      shared: db.prepare(`
+      owned: await db.all('SELECT id, title, updated_at FROM documents WHERE owner_id = ? ORDER BY updated_at DESC', req.user.id),
+      shared: await db.all(`
         SELECT d.id, d.title, d.updated_at, s.role, u.name AS owner_name
         FROM shares s JOIN documents d ON d.id = s.document_id JOIN users u ON u.id = d.owner_id
-        WHERE s.user_id = ? ORDER BY d.updated_at DESC`).all(req.user.id),
+        WHERE s.user_id = ? ORDER BY d.updated_at DESC`, req.user.id),
     });
   });
 
-  app.post('/api/docs', auth, (req, res) => {
-    res.status(201).json(createDoc(req.user.id, validTitle(req.body?.title ?? 'Untitled document')));
+  app.post('/api/docs', auth, async (req, res) => {
+    res.status(201).json(await createDoc(req.user.id, validTitle(req.body?.title ?? 'Untitled document')));
   });
 
   app.post('/api/import', auth, express.raw({ type: () => true, limit: '5mb' }), async (req, res) => {
@@ -220,20 +226,20 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
       html = ext === '.md' ? marked.parse(text) : text.split(/\r?\n/).map((l) => `<p>${escapeHtml(l) || '<br>'}</p>`).join('');
     }
     const title = filename.slice(0, -ext.length).trim().slice(0, MAX_TITLE) || 'Imported document';
-    res.status(201).json(createDoc(req.user.id, title, html));
+    res.status(201).json(await createDoc(req.user.id, title, html));
   });
 
-  app.get('/api/docs/:id', auth, access('owner', 'editor', 'viewer'), (req, res) => {
-    const doc = db.prepare(`
+  app.get('/api/docs/:id', auth, access('owner', 'editor', 'viewer'), async (req, res) => {
+    const doc = await db.one(`
       SELECT d.id, d.title, d.content, d.version, d.updated_at, u.name AS owner_name, u.email AS owner_email
-      FROM documents d JOIN users u ON u.id = d.owner_id WHERE d.id = ?`).get(Number(req.params.id));
-    const shares = db.prepare(`
+      FROM documents d JOIN users u ON u.id = d.owner_id WHERE d.id = ?`, Number(req.params.id));
+    const shares = await db.all(`
       SELECT u.id, u.name, u.email, s.role FROM shares s JOIN users u ON u.id = s.user_id
-      WHERE s.document_id = ? ORDER BY u.name`).all(doc.id);
+      WHERE s.document_id = ? ORDER BY u.name`, doc.id);
     res.json({ ...doc, role: req.role, shares });
   });
 
-  app.patch('/api/docs/:id', auth, access('owner', 'editor'), (req, res) => {
+  app.patch('/api/docs/:id', auth, access('owner', 'editor'), async (req, res) => {
     const { title, content, version } = req.body ?? {};
     if (!Number.isInteger(version)) throw badRequest('version is required');
     const updates = {};
@@ -248,51 +254,57 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
     const id = Number(req.params.id);
     const cols = Object.keys(updates);
     // Optimistic concurrency: only save if nobody else has saved since this client last loaded/saved.
-    const { changes } = db.prepare(
-      `UPDATE documents SET ${cols.map((c) => `${c} = ?`).join(', ')}, version = version + 1 WHERE id = ? AND version = ?`
-    ).run(...cols.map((c) => updates[c]), id, version);
-    if (!changes) {
-      const latest = db.prepare('SELECT title, content, version, updated_at FROM documents WHERE id = ?').get(id);
+    const { rowsAffected } = await db.run(
+      `UPDATE documents SET ${cols.map((c) => `${c} = ?`).join(', ')}, version = version + 1 WHERE id = ? AND version = ?`,
+      ...cols.map((c) => updates[c]), id, version);
+    if (!rowsAffected) {
+      const latest = await db.one('SELECT title, content, version, updated_at FROM documents WHERE id = ?', id);
       return res.status(409).json({ error: 'This document was changed by someone else', latest });
     }
-    recordRevision(id, req.user.id, updates.updated_at);
+    await recordRevision(id, req.user.id, updates.updated_at);
     res.json({ version: version + 1, updated_at: updates.updated_at });
   });
 
-  app.delete('/api/docs/:id', auth, access('owner'), (req, res) => {
-    db.prepare('DELETE FROM documents WHERE id = ?').run(Number(req.params.id));
+  app.delete('/api/docs/:id', auth, access('owner'), async (req, res) => {
+    // Explicit deletes rather than ON DELETE CASCADE, which depends on a per-connection pragma.
+    const id = Number(req.params.id);
+    await db.raw.batch([
+      { sql: 'DELETE FROM revisions WHERE document_id = ?', args: [id] },
+      { sql: 'DELETE FROM shares WHERE document_id = ?', args: [id] },
+      { sql: 'DELETE FROM documents WHERE id = ?', args: [id] },
+    ], 'write');
     res.status(204).end();
   });
 
   // --- version history ---
-  app.get('/api/docs/:id/revisions', auth, access('owner', 'editor', 'viewer'), (req, res) => {
-    res.json(db.prepare(`
+  app.get('/api/docs/:id/revisions', auth, access('owner', 'editor', 'viewer'), async (req, res) => {
+    res.json(await db.all(`
       SELECT r.id, r.version, r.title, r.created_at, u.name AS author_name
       FROM revisions r JOIN users u ON u.id = r.author_id
-      WHERE r.document_id = ? ORDER BY r.id DESC LIMIT 100`).all(Number(req.params.id)));
+      WHERE r.document_id = ? ORDER BY r.id DESC LIMIT 100`, Number(req.params.id)));
   });
 
-  app.get('/api/docs/:id/revisions/:revId', auth, access('owner', 'editor', 'viewer'), (req, res) => {
-    const rev = db.prepare('SELECT id, version, title, content, created_at FROM revisions WHERE id = ? AND document_id = ?')
-      .get(Number(req.params.revId), Number(req.params.id));
+  app.get('/api/docs/:id/revisions/:revId', auth, access('owner', 'editor', 'viewer'), async (req, res) => {
+    const rev = await db.one('SELECT id, version, title, content, created_at FROM revisions WHERE id = ? AND document_id = ?',
+      Number(req.params.revId), Number(req.params.id));
     if (!rev) return res.status(404).json({ error: 'Revision not found' });
     res.json(rev);
   });
 
   // --- sharing ---
-  app.post('/api/docs/:id/shares', auth, access('owner'), (req, res) => {
+  app.post('/api/docs/:id/shares', auth, access('owner'), async (req, res) => {
     const { email, role } = req.body ?? {};
     if (!['viewer', 'editor'].includes(role)) throw badRequest('Role must be viewer or editor');
-    const user = typeof email === 'string' && db.prepare('SELECT id, name, email FROM users WHERE email = ?').get(email.trim().toLowerCase());
+    const user = typeof email === 'string' && await db.one('SELECT id, name, email FROM users WHERE email = ?', email.trim().toLowerCase());
     if (!user) return res.status(404).json({ error: 'No user with that email' });
     if (user.id === req.user.id) throw badRequest('You already own this document');
-    db.prepare(`INSERT INTO shares (document_id, user_id, role) VALUES (?, ?, ?)
-      ON CONFLICT (document_id, user_id) DO UPDATE SET role = excluded.role`).run(Number(req.params.id), user.id, role);
+    await db.run(`INSERT INTO shares (document_id, user_id, role) VALUES (?, ?, ?)
+      ON CONFLICT (document_id, user_id) DO UPDATE SET role = excluded.role`, Number(req.params.id), user.id, role);
     res.status(201).json({ ...user, role });
   });
 
-  app.delete('/api/docs/:id/shares/:userId', auth, access('owner'), (req, res) => {
-    db.prepare('DELETE FROM shares WHERE document_id = ? AND user_id = ?').run(Number(req.params.id), Number(req.params.userId));
+  app.delete('/api/docs/:id/shares/:userId', auth, access('owner'), async (req, res) => {
+    await db.run('DELETE FROM shares WHERE document_id = ? AND user_id = ?', Number(req.params.id), Number(req.params.userId));
     res.status(204).end();
   });
 

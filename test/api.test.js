@@ -3,12 +3,11 @@ import assert from 'node:assert/strict';
 import { createApp } from '../src/app.js';
 
 let server, base;
-before(() => new Promise((resolve) => {
-  server = createApp(':memory:').listen(0, () => {
-    base = `http://localhost:${server.address().port}/api`;
-    resolve();
-  });
-}));
+before(async () => {
+  const app = await createApp(':memory:');
+  await new Promise((resolve) => { server = app.listen(0, resolve); });
+  base = `http://localhost:${server.address().port}/api`;
+});
 after(() => server.close());
 
 // Minimal client that keeps one user's session cookie.
