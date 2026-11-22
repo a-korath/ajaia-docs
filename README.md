@@ -22,6 +22,8 @@ All passwords are `demo1234`.
 - **Formatting:** headings (H1–H3), bold, italic, underline, strikethrough, numbered and bulleted lists, blockquotes, links.
 - **File import:** `.txt`, `.md`, and `.docx` files up to 5 MB. Each import becomes a new editable document, titled with the file name. Markdown and Word headings, lists, and emphasis carry over. Other file types are rejected with a clear message.
 - **Sharing:** the owner grants access by email with a role: **Can edit** or **Can view**. The owner can also change a role or revoke access. The home page splits documents into *My documents* and *Shared with me*, showing the owner and your role.
+- **Conflict detection:** if two people edit the same document and one saves first, the other sees a warning with *Load their version* or *Overwrite with mine*, instead of silently overwriting.
+- **Safe content:** HTML is sanitized on the server on every save and import.
 - **Persistence:** everything lives in SQLite (users, sessions, documents, shares). Document content is stored as HTML.
 
 ## Run locally

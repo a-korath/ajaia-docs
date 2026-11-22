@@ -8,9 +8,10 @@ One Node process serves a JSON API and a static single-page frontend.
 Browser (vanilla JS + Quill)  ──fetch/JSON──>  Express (src/app.js)  ──>  SQLite (node:sqlite)
 ```
 
-- **Backend:** Express 5 plus Node's built-in `node:sqlite`. Four tables: `users`, `sessions`, `documents`, `shares(document_id, user_id, role)`. Foreign keys cascade, so deleting a document removes its shares.
+- **Backend:** Express 5 plus Node's built-in `node:sqlite`. Four tables: `users`, `sessions`, `documents` (with a `version` counter), `shares(document_id, user_id, role)`. Foreign keys cascade, so deleting a document removes its shares.
 - **Frontend:** plain HTML/JS with hash routing (`#/` and `#/doc/:id`). [Quill 2](https://quilljs.com) handles the editor. There's no bundler or framework, so the app has no build step.
 - **Import:** the client uploads raw bytes. The server converts `.docx` → HTML with `mammoth` and `.md` → HTML with `marked`, and turns `.txt` into escaped paragraphs.
+- **Sanitization:** every write (saves and imports) runs through `sanitize-html` with an allowlist that matches what the editor can render. Allowed: headings, inline marks, lists, quotes, code, links (http/https/mailto only), images, and `ql-*` classes.
 
 ## What I prioritized and why
 
@@ -23,8 +24,8 @@ Browser (vanilla JS + Quill)  ──fetch/JSON──>  Express (src/app.js)  ─
 
 | Decision | Why | Cost / ceiling |
 |---|---|---|
-| Content stored as HTML | Simple, readable, and it's what import converters produce. | Stored HTML isn't sanitized on the server. On render it always goes through Quill's clipboard converter, which keeps only the supported formats (verified: `<script>` and `onerror` are dropped). Before HTML is rendered anywhere else (export, previews), add server-side sanitization (e.g. DOMPurify/sanitize-html). |
-| Last-write-wins saves | Real-time co-editing is a big project (CRDT/OT). | If two editors edit at once, the later save overwrites. Next step: a `version` column plus a 409 response on mismatch, then Yjs for live collaboration. |
+| Content stored as HTML, sanitized on write | Simple, readable, and it's what import converters produce. Cleaning at write time means stored HTML is safe wherever it's rendered later (export, previews), not only in Quill. | The allowlist has to grow with any new editor format. The client still loads content through Quill's converter as a second layer. |
+| Optimistic concurrency instead of real-time co-editing | Real-time editing (CRDT/OT) is a big project. A version check is ~20 lines and prevents silent data loss. | Every save sends the version it was based on. If someone saved in between, the server returns **409** with the latest copy, and the editor shows a banner: *Load their version* or *Overwrite with mine*. There's no merging; conflicts are caught but not resolved automatically. Next step: Yjs for live collaboration. |
 | Simple email/password login, seeded users | Sharing needs real identities. A full auth system was out of scope. | No sign-up or password reset. Passwords are hashed with scrypt; sessions are random tokens in an HttpOnly, SameSite=Lax cookie. |
 | Share by email with viewer/editor roles | The minimum that shows clear intent. Roles cost about 10 extra lines. | No share links, groups, or transfer of ownership. |
 | SQLite, built-in driver | No native build step, so it works on any Node 22.13+ host. | A single instance only. On Render's free tier the file is ephemeral (see README). Postgres would be the move for multiple instances. |
@@ -36,7 +37,7 @@ Real-time collaboration and presence, comments and suggestions, version history,
 
 ## Next 2–4 hours
 
-1. Optimistic concurrency (a `version` check with a "this document changed — reload" banner).
-2. Server-side HTML sanitization as defense in depth.
-3. Export to Markdown/PDF.
-4. Persistent storage in production (Render disk or Postgres) and a Playwright smoke test of the UI flow.
+1. Poll for or push "this document changed" notices, so conflicts show up before you type rather than on save.
+2. Export to Markdown/PDF.
+3. Persistent storage in production (Render disk or Postgres).
+4. A Playwright smoke test of the UI flow.

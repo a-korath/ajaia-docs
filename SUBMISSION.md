@@ -20,8 +20,8 @@
 
 ## Status
 
-**Working end to end:** sign in/out; create, rename, edit, autosave, reopen, delete; rich text (H1–H3, bold, italic, underline, strike, lists, quotes, links); import of `.txt`/`.md`/`.docx` as new documents; sharing by email with viewer/editor roles, role changes and revoking; owned vs shared lists; SQLite persistence.
+**Working end to end:** sign in/out; create, rename, edit, autosave, reopen, delete; rich text (H1–H3, bold, italic, underline, strike, lists, quotes, links); import of `.txt`/`.md`/`.docx` as new documents; sharing by email with viewer/editor roles, role changes and revoking; owned vs shared lists; save-conflict detection with a reload/overwrite choice; server-side HTML sanitization; SQLite persistence.
 
-**Incomplete / known limits:** no real-time co-editing (last write wins); no sign-up; data on the free Render instance resets on redeploy or idle restart.
+**Incomplete / known limits:** no real-time co-editing (conflicts are detected and the user chooses, but nothing is merged); no sign-up; data on the free Render instance resets on redeploy or idle restart.
 
-**Next 2–4 hours:** version-checked saves with conflict warning, server-side HTML sanitization, Markdown/PDF export, persistent production storage.
+**Next 2–4 hours:** earlier conflict notices (polling or push), Markdown/PDF export, persistent production storage, a UI smoke test.

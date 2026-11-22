@@ -14,6 +14,7 @@ let dirty = false;
 let saving = null;
 let saveTimer = null;
 let flash = '';
+let conflict = null; // latest server copy when our save was rejected
 
 async function api(path, { method = 'GET', body, headers } = {}) {
   const isJson = body !== undefined && !(body instanceof Blob);
@@ -27,8 +28,8 @@ async function api(path, { method = 'GET', body, headers } = {}) {
     show('login');
   }
   if (!res.ok) {
-    const { error } = await res.json().catch(() => ({}));
-    throw Object.assign(new Error(error || res.statusText), { status: res.status });
+    const data = await res.json().catch(() => ({}));
+    throw Object.assign(new Error(data.error || res.statusText), { status: res.status, data });
   }
   return res.status === 204 ? null : res.json();
 }
@@ -68,19 +69,21 @@ function markDirty() {
 async function save() {
   clearTimeout(saveTimer);
   if (saving) await saving;
-  if (!dirty || !current) return;
-  const body = { content: quill.root.innerHTML };
+  if (!dirty || !current || conflict) return;
+  const body = { content: quill.root.innerHTML, version: current.version };
   const title = $('title').value.trim();
   if (title) body.title = title;
   dirty = false;
   setStatus('Saving…');
   saving = api(`/docs/${current.id}`, { method: 'PATCH', body })
-    .then(() => {
+    .then(({ version }) => {
+      current.version = version;
       if (title) current.title = title;
       setStatus(dirty ? 'Unsaved changes' : title ? 'All changes saved' : 'Saved — title can’t be empty', !title);
     })
     .catch((err) => {
       dirty = true;
+      if (err.status === 409) return showConflict(err.data.latest);
       const retry = !err.status || err.status >= 500;
       setStatus(`Save failed: ${err.message}${retry ? ' — retrying…' : ''}`, true);
       if (retry) saveTimer = setTimeout(save, 3000);
@@ -88,6 +91,24 @@ async function save() {
     .finally(() => { saving = null; });
   await saving;
 }
+
+function showConflict(latest) {
+  conflict = latest;
+  setStatus('Not saved — conflict', true);
+  $('conflict').hidden = false;
+}
+
+$('conflict-reload').onclick = () => {
+  dirty = false;
+  openDoc(current.id);
+};
+$('conflict-overwrite').onclick = () => {
+  current.version = conflict.version;
+  conflict = null;
+  $('conflict').hidden = true;
+  dirty = true;
+  save();
+};
 
 quill.on('text-change', (_delta, _old, source) => { if (source === 'user') markDirty(); });
 $('title').addEventListener('input', markDirty);
@@ -98,6 +119,8 @@ async function openDoc(id, { focusTitle = false } = {}) {
   const doc = await api(`/docs/${id}`);
   clearTimeout(saveTimer);
   dirty = false;
+  conflict = null;
+  $('conflict').hidden = true;
   current = doc;
   const readOnly = doc.role === 'viewer';
   $('title').value = doc.title;

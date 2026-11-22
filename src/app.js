@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import mammoth from 'mammoth';
 import { marked } from 'marked';
+import sanitizeHtml from 'sanitize-html';
 
 const MAX_TITLE = 200;
 const MAX_CONTENT = 1_000_000; // ~1 MB of HTML per document
@@ -16,6 +17,18 @@ function checkPassword(pw, stored) {
   const [salt, hash] = stored.split(':');
   return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), crypto.scryptSync(pw, salt, 32));
 }
+
+// Allowlist matching what the editor can render. Applied to every write so stored HTML is safe
+// wherever it's rendered, not just inside Quill.
+const SANITIZE = {
+  allowedTags: ['p', 'br', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'strong', 'b', 'em', 'i', 'u', 's', 'strike',
+    'ol', 'ul', 'li', 'blockquote', 'pre', 'code', 'a', 'span', 'img'],
+  allowedAttributes: { a: ['href', 'target', 'rel'], li: ['data-list'], img: ['src', 'alt'], '*': ['class'] },
+  allowedClasses: { '*': ['ql-*'] },
+  allowedSchemes: ['http', 'https', 'mailto'],
+  allowedSchemesByTag: { img: ['http', 'https', 'data'] },
+};
+const clean = (html) => sanitizeHtml(html, SANITIZE);
 
 const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
@@ -44,6 +57,7 @@ function initDb(path) {
       owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       title TEXT NOT NULL,
       content TEXT NOT NULL DEFAULT '',
+      version INTEGER NOT NULL DEFAULT 1,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -110,6 +124,7 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
   }
 
   function createDoc(ownerId, title, content = '') {
+    content = clean(content);
     if (content.length > MAX_CONTENT) throw badRequest('Document is too large');
     const now = new Date().toISOString();
     const { lastInsertRowid } = db.prepare(
@@ -178,7 +193,7 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
 
   app.get('/api/docs/:id', auth, access('owner', 'editor', 'viewer'), (req, res) => {
     const doc = db.prepare(`
-      SELECT d.id, d.title, d.content, d.updated_at, u.name AS owner_name, u.email AS owner_email
+      SELECT d.id, d.title, d.content, d.version, d.updated_at, u.name AS owner_name, u.email AS owner_email
       FROM documents d JOIN users u ON u.id = d.owner_id WHERE d.id = ?`).get(Number(req.params.id));
     const shares = db.prepare(`
       SELECT u.id, u.name, u.email, s.role FROM shares s JOIN users u ON u.id = s.user_id
@@ -187,21 +202,28 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
   });
 
   app.patch('/api/docs/:id', auth, access('owner', 'editor'), (req, res) => {
-    const { title, content } = req.body ?? {};
+    const { title, content, version } = req.body ?? {};
+    if (!Number.isInteger(version)) throw badRequest('version is required');
     const updates = {};
     if (title !== undefined) updates.title = validTitle(title);
     if (content !== undefined) {
       if (typeof content !== 'string') throw badRequest('Content must be a string');
-      if (content.length > MAX_CONTENT) throw badRequest('Document is too large');
-      updates.content = content;
+      updates.content = clean(content);
+      if (updates.content.length > MAX_CONTENT) throw badRequest('Document is too large');
     }
     if (!Object.keys(updates).length) throw badRequest('Nothing to update');
     updates.updated_at = new Date().toISOString();
-    // ponytail: last write wins; add a version column + 409 on mismatch if concurrent editing matters
+    const id = Number(req.params.id);
     const cols = Object.keys(updates);
-    db.prepare(`UPDATE documents SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
-      .run(...cols.map((c) => updates[c]), Number(req.params.id));
-    res.json({ updated_at: updates.updated_at });
+    // Optimistic concurrency: only save if nobody else has saved since this client last loaded/saved.
+    const { changes } = db.prepare(
+      `UPDATE documents SET ${cols.map((c) => `${c} = ?`).join(', ')}, version = version + 1 WHERE id = ? AND version = ?`
+    ).run(...cols.map((c) => updates[c]), id, version);
+    if (!changes) {
+      const latest = db.prepare('SELECT title, content, version, updated_at FROM documents WHERE id = ?').get(id);
+      return res.status(409).json({ error: 'This document was changed by someone else', latest });
+    }
+    res.json({ version: version + 1, updated_at: updates.updated_at });
   });
 
   app.delete('/api/docs/:id', auth, access('owner'), (req, res) => {

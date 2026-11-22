@@ -39,7 +39,7 @@ test('sharing grants exactly the requested access', async () => {
   const carol = await login('carol@ajaia.test');
 
   const { body: doc } = await alice.call('/docs', 'POST', { title: 'Plan' });
-  await alice.call(`/docs/${doc.id}`, 'PATCH', { content: '<h1>Q1</h1><p><strong>Ship it</strong></p>' });
+  await alice.call(`/docs/${doc.id}`, 'PATCH', { content: '<h1>Q1</h1><p><strong>Ship it</strong></p>', version: 1 });
 
   // Not shared yet: invisible to Bob.
   assert.equal((await bob.call(`/docs/${doc.id}`)).status, 404);
@@ -49,13 +49,13 @@ test('sharing grants exactly the requested access', async () => {
   const read = await bob.call(`/docs/${doc.id}`);
   assert.equal(read.body.role, 'viewer');
   assert.equal(read.body.content, '<h1>Q1</h1><p><strong>Ship it</strong></p>');
-  assert.equal((await bob.call(`/docs/${doc.id}`, 'PATCH', { content: 'hacked' })).status, 403);
+  assert.equal((await bob.call(`/docs/${doc.id}`, 'PATCH', { content: 'hacked', version: 2 })).status, 403);
   assert.equal((await bob.call(`/docs/${doc.id}/shares`, 'POST', { email: 'carol@ajaia.test', role: 'editor' })).status, 403);
   assert.ok((await bob.call('/docs')).body.shared.some((d) => d.id === doc.id && d.owner_name === 'Alice'));
 
   // Upgrade to editor: Bob can now edit, but still can't delete.
   await alice.call(`/docs/${doc.id}/shares`, 'POST', { email: 'bob@ajaia.test', role: 'editor' });
-  assert.equal((await bob.call(`/docs/${doc.id}`, 'PATCH', { title: 'Plan v2' })).status, 200);
+  assert.equal((await bob.call(`/docs/${doc.id}`, 'PATCH', { title: 'Plan v2', version: 2 })).status, 200);
   assert.equal((await alice.call(`/docs/${doc.id}`)).body.title, 'Plan v2');
   assert.equal((await bob.call(`/docs/${doc.id}`, 'DELETE')).status, 403);
 
@@ -69,7 +69,7 @@ test('sharing grants exactly the requested access', async () => {
 test('validates input', async () => {
   const alice = await login('alice@ajaia.test');
   const { body: doc } = await alice.call('/docs', 'POST', {});
-  assert.equal((await alice.call(`/docs/${doc.id}`, 'PATCH', { title: '   ' })).status, 400);
+  assert.equal((await alice.call(`/docs/${doc.id}`, 'PATCH', { title: '   ', version: 1 })).status, 400);
   assert.equal((await alice.call(`/docs/${doc.id}/shares`, 'POST', { email: 'nobody@x.test', role: 'viewer' })).status, 404);
   assert.equal((await alice.call(`/docs/${doc.id}/shares`, 'POST', { email: 'bob@ajaia.test', role: 'admin' })).status, 400);
 });
@@ -90,4 +90,43 @@ test('imports markdown as a formatted document and rejects unsupported types', a
 
   assert.equal((await upload('report.pdf', 'x')).status, 400);
   assert.equal((await upload('empty.txt', '')).status, 400);
+});
+
+test('rejects a stale save with 409 and returns the latest copy', async () => {
+  const alice = await login('alice@ajaia.test');
+  const bob = await login('bob@ajaia.test');
+  const { body: doc } = await alice.call('/docs', 'POST', { title: 'Shared' });
+  await alice.call(`/docs/${doc.id}/shares`, 'POST', { email: 'bob@ajaia.test', role: 'editor' });
+
+  // Both opened version 1. Bob saves first; Alice's save is now stale.
+  assert.equal((await bob.call(`/docs/${doc.id}`, 'PATCH', { content: '<p>bob</p>', version: 1 })).body.version, 2);
+  const stale = await alice.call(`/docs/${doc.id}`, 'PATCH', { content: '<p>alice</p>', version: 1 });
+  assert.equal(stale.status, 409);
+  assert.equal(stale.body.latest.content, '<p>bob</p>');
+  assert.equal(stale.body.latest.version, 2);
+
+  // Alice chooses to overwrite using the latest version.
+  assert.equal((await alice.call(`/docs/${doc.id}`, 'PATCH', { content: '<p>alice</p>', version: 2 })).status, 200);
+  assert.equal((await bob.call(`/docs/${doc.id}`)).body.content, '<p>alice</p>');
+  assert.equal((await alice.call(`/docs/${doc.id}`, 'PATCH', { content: 'x' })).status, 400); // version required
+});
+
+test('strips unsafe HTML on save and import, keeps formatting', async () => {
+  const alice = await login('alice@ajaia.test');
+  const { body: doc } = await alice.call('/docs', 'POST', {});
+  await alice.call(`/docs/${doc.id}`, 'PATCH', {
+    version: 1,
+    content: '<h2 onclick="x()">Hi</h2><script>alert(1)</script><p><a href="javascript:alert(1)">bad</a> <a href="https://ok.test">ok</a></p>'
+      + '<ol><li data-list="bullet" class="ql-indent-1 evil">item</li></ol><img src="x" onerror="alert(1)">',
+  });
+  const { content } = (await alice.call(`/docs/${doc.id}`)).body;
+  assert.equal(content, '<h2>Hi</h2><p><a>bad</a> <a href="https://ok.test">ok</a></p>'
+    + '<ol><li data-list="bullet" class="ql-indent-1">item</li></ol><img src="x" />');
+
+  const res = await fetch(`${base}/import`, {
+    method: 'POST', headers: { cookie: alice.cookie, 'X-Filename': 'x.md' }, body: '# T\n\n<script>alert(1)</script>',
+  });
+  const imported = (await alice.call(`/docs/${(await res.json()).id}`)).body.content;
+  assert.match(imported, /<h1>T<\/h1>/);
+  assert.doesNotMatch(imported, /script/);
 });

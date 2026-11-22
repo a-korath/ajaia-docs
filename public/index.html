@@ -52,6 +52,11 @@
         <button id="share-toggle" class="secondary">Share</button>
       </div>
       <p class="meta" id="doc-meta"></p>
+      <div id="conflict" class="conflict" role="alert" hidden>
+        <span>Someone else saved this document while you were editing. Your recent changes are not saved.</span>
+        <button id="conflict-reload" class="secondary">Load their version</button>
+        <button id="conflict-overwrite" class="danger">Overwrite with mine</button>
+      </div>
       <div id="share-panel" class="card" hidden>
         <form id="share-form">
           <input name="email" type="email" placeholder="Email address" required aria-label="Email to share with">

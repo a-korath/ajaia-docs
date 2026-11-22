@@ -23,7 +23,7 @@
 
 ## How correctness was verified
 
-- **Automated:** `npm test` runs 4 API tests: auth rejection, the full share lifecycle (none → viewer → editor → revoked, plus a non-invited user), input validation, and Markdown import plus rejected file types.
-- **Manual, in a real browser:** signed in, opened a doc, typed bold text, reloaded, and confirmed it persisted. Shared a doc as viewer, signed in as that user, and confirmed it's read-only (toolbar hidden, not editable, "View only" badge). Ran the XSS payload check above.
+- **Automated:** `npm test` runs 6 API tests: auth rejection, the full share lifecycle (none → viewer → editor → revoked, plus a non-invited user), input validation, Markdown import plus rejected file types, stale-save 409 plus overwrite, and HTML sanitization on save and import.
+- **Manual, in a real browser:** signed in, opened a doc, typed bold text, reloaded, and confirmed it persisted. Shared a doc as viewer, signed in as that user, and confirmed it's read-only (toolbar hidden, not editable, "View only" badge). Ran the XSS payload check above. Simulated a second editor saving first and confirmed the conflict banner appears, and that *Load their version* restores normal saving.
 - **Import:** converted a real `.docx` via curl and checked the resulting HTML.
 - **UX:** reviewed screenshots of the login, list, and editor views.
