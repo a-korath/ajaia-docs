@@ -1,0 +1,238 @@
+import express from 'express';
+import { DatabaseSync } from 'node:sqlite';
+import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+import mammoth from 'mammoth';
+import { marked } from 'marked';
+
+const MAX_TITLE = 200;
+const MAX_CONTENT = 1_000_000; // ~1 MB of HTML per document
+const IMPORT_TYPES = ['.txt', '.md', '.docx'];
+
+const hashPassword = (pw, salt = crypto.randomBytes(16).toString('hex')) =>
+  `${salt}:${crypto.scryptSync(pw, salt, 32).toString('hex')}`;
+
+function checkPassword(pw, stored) {
+  const [salt, hash] = stored.split(':');
+  return crypto.timingSafeEqual(Buffer.from(hash, 'hex'), crypto.scryptSync(pw, salt, 32));
+}
+
+const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+
+function badRequest(message) {
+  return Object.assign(new Error(message), { status: 400 });
+}
+
+function initDb(path) {
+  const db = new DatabaseSync(path);
+  db.exec(`
+    PRAGMA foreign_keys = ON;
+    PRAGMA journal_mode = WAL;
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY,
+      email TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
+      password_hash TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS sessions (
+      token TEXT PRIMARY KEY,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS documents (
+      id INTEGER PRIMARY KEY,
+      owner_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS shares (
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
+      PRIMARY KEY (document_id, user_id)
+    );
+  `);
+
+  // Seed demo accounts on first boot so reviewers can test sharing immediately.
+  if (!db.prepare('SELECT 1 FROM users LIMIT 1').get()) {
+    const addUser = db.prepare('INSERT INTO users (email, name, password_hash) VALUES (?, ?, ?)');
+    for (const [email, name] of [['alice@ajaia.test', 'Alice'], ['bob@ajaia.test', 'Bob'], ['carol@ajaia.test', 'Carol']]) {
+      addUser.run(email, name, hashPassword('demo1234'));
+    }
+    const now = new Date().toISOString();
+    const { lastInsertRowid } = db.prepare(
+      'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (1, ?, ?, ?, ?)'
+    ).run('Welcome to Ajaia Docs', '<h1>Welcome</h1><p>This document is owned by <strong>Alice</strong> and shared with Bob as an <em>editor</em>.</p><ul><li>Edit anything — changes autosave.</li><li>Use the toolbar for headings, lists and formatting.</li></ul>', now, now);
+    db.prepare("INSERT INTO shares (document_id, user_id, role) VALUES (?, 2, 'editor')").run(lastInsertRowid);
+  }
+  return db;
+}
+
+export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
+  const db = initDb(dbPath);
+  const app = express();
+  app.use(express.json({ limit: '2mb' }));
+  app.use(express.static(fileURLToPath(new URL('../public', import.meta.url))));
+
+  function auth(req, res, next) {
+    const token = /(?:^|;\s*)sid=([^;]+)/.exec(req.headers.cookie || '')?.[1];
+    const user = token && db.prepare(
+      'SELECT u.id, u.email, u.name FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.token = ?'
+    ).get(token);
+    if (!user) return res.status(401).json({ error: 'Please sign in' });
+    req.user = user;
+    req.token = token;
+    next();
+  }
+
+  function roleFor(docId, userId) {
+    return db.prepare(`
+      SELECT CASE WHEN d.owner_id = ? THEN 'owner' ELSE s.role END AS role
+      FROM documents d LEFT JOIN shares s ON s.document_id = d.id AND s.user_id = ?
+      WHERE d.id = ?`).get(userId, userId, docId)?.role ?? null;
+  }
+
+  // 404 (not 403) when the user has no access at all, so document ids don't leak.
+  const access = (...allowed) => (req, res, next) => {
+    const role = roleFor(Number(req.params.id), req.user.id);
+    if (!role) return res.status(404).json({ error: 'Document not found' });
+    if (!allowed.includes(role)) return res.status(403).json({ error: `You have ${role} access to this document` });
+    req.role = role;
+    next();
+  };
+
+  function validTitle(title) {
+    if (typeof title !== 'string' || !title.trim()) throw badRequest('Title is required');
+    if (title.length > MAX_TITLE) throw badRequest(`Title must be at most ${MAX_TITLE} characters`);
+    return title.trim();
+  }
+
+  function createDoc(ownerId, title, content = '') {
+    if (content.length > MAX_CONTENT) throw badRequest('Document is too large');
+    const now = new Date().toISOString();
+    const { lastInsertRowid } = db.prepare(
+      'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(ownerId, title, content, now, now);
+    return { id: Number(lastInsertRowid), title };
+  }
+
+  // --- auth ---
+  app.post('/api/login', (req, res) => {
+    const { email, password } = req.body ?? {};
+    const user = typeof email === 'string' && db.prepare('SELECT * FROM users WHERE email = ?').get(email.trim().toLowerCase());
+    if (!user || typeof password !== 'string' || !checkPassword(password, user.password_hash)) {
+      return res.status(401).json({ error: 'Invalid email or password' });
+    }
+    const token = crypto.randomBytes(32).toString('hex');
+    db.prepare('INSERT INTO sessions (token, user_id, created_at) VALUES (?, ?, ?)').run(token, user.id, new Date().toISOString());
+    const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+    res.setHeader('Set-Cookie', `sid=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=2592000${secure}`);
+    res.json({ id: user.id, email: user.email, name: user.name });
+  });
+
+  app.post('/api/logout', auth, (req, res) => {
+    db.prepare('DELETE FROM sessions WHERE token = ?').run(req.token);
+    res.setHeader('Set-Cookie', 'sid=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0');
+    res.json({ ok: true });
+  });
+
+  app.get('/api/me', auth, (req, res) => res.json(req.user));
+
+  // --- documents ---
+  app.get('/api/docs', auth, (req, res) => {
+    res.json({
+      owned: db.prepare('SELECT id, title, updated_at FROM documents WHERE owner_id = ? ORDER BY updated_at DESC').all(req.user.id),
+      shared: db.prepare(`
+        SELECT d.id, d.title, d.updated_at, s.role, u.name AS owner_name
+        FROM shares s JOIN documents d ON d.id = s.document_id JOIN users u ON u.id = d.owner_id
+        WHERE s.user_id = ? ORDER BY d.updated_at DESC`).all(req.user.id),
+    });
+  });
+
+  app.post('/api/docs', auth, (req, res) => {
+    res.status(201).json(createDoc(req.user.id, validTitle(req.body?.title ?? 'Untitled document')));
+  });
+
+  app.post('/api/import', auth, express.raw({ type: () => true, limit: '5mb' }), async (req, res) => {
+    const filename = decodeURIComponent(req.get('X-Filename') || '');
+    const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+    if (!IMPORT_TYPES.includes(ext)) throw badRequest(`Unsupported file type. Use ${IMPORT_TYPES.join(', ')}`);
+    if (!Buffer.isBuffer(req.body) || !req.body.length) throw badRequest('File is empty');
+
+    let html;
+    if (ext === '.docx') {
+      try {
+        html = (await mammoth.convertToHtml({ buffer: req.body })).value;
+      } catch {
+        throw badRequest('Could not read .docx file');
+      }
+    } else {
+      const text = req.body.toString('utf8');
+      html = ext === '.md' ? marked.parse(text) : text.split(/\r?\n/).map((l) => `<p>${escapeHtml(l) || '<br>'}</p>`).join('');
+    }
+    const title = filename.slice(0, -ext.length).trim().slice(0, MAX_TITLE) || 'Imported document';
+    res.status(201).json(createDoc(req.user.id, title, html));
+  });
+
+  app.get('/api/docs/:id', auth, access('owner', 'editor', 'viewer'), (req, res) => {
+    const doc = db.prepare(`
+      SELECT d.id, d.title, d.content, d.updated_at, u.name AS owner_name, u.email AS owner_email
+      FROM documents d JOIN users u ON u.id = d.owner_id WHERE d.id = ?`).get(Number(req.params.id));
+    const shares = db.prepare(`
+      SELECT u.id, u.name, u.email, s.role FROM shares s JOIN users u ON u.id = s.user_id
+      WHERE s.document_id = ? ORDER BY u.name`).all(doc.id);
+    res.json({ ...doc, role: req.role, shares });
+  });
+
+  app.patch('/api/docs/:id', auth, access('owner', 'editor'), (req, res) => {
+    const { title, content } = req.body ?? {};
+    const updates = {};
+    if (title !== undefined) updates.title = validTitle(title);
+    if (content !== undefined) {
+      if (typeof content !== 'string') throw badRequest('Content must be a string');
+      if (content.length > MAX_CONTENT) throw badRequest('Document is too large');
+      updates.content = content;
+    }
+    if (!Object.keys(updates).length) throw badRequest('Nothing to update');
+    updates.updated_at = new Date().toISOString();
+    // ponytail: last write wins; add a version column + 409 on mismatch if concurrent editing matters
+    const cols = Object.keys(updates);
+    db.prepare(`UPDATE documents SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE id = ?`)
+      .run(...cols.map((c) => updates[c]), Number(req.params.id));
+    res.json({ updated_at: updates.updated_at });
+  });
+
+  app.delete('/api/docs/:id', auth, access('owner'), (req, res) => {
+    db.prepare('DELETE FROM documents WHERE id = ?').run(Number(req.params.id));
+    res.status(204).end();
+  });
+
+  // --- sharing ---
+  app.post('/api/docs/:id/shares', auth, access('owner'), (req, res) => {
+    const { email, role } = req.body ?? {};
+    if (!['viewer', 'editor'].includes(role)) throw badRequest('Role must be viewer or editor');
+    const user = typeof email === 'string' && db.prepare('SELECT id, name, email FROM users WHERE email = ?').get(email.trim().toLowerCase());
+    if (!user) return res.status(404).json({ error: 'No user with that email' });
+    if (user.id === req.user.id) throw badRequest('You already own this document');
+    db.prepare(`INSERT INTO shares (document_id, user_id, role) VALUES (?, ?, ?)
+      ON CONFLICT (document_id, user_id) DO UPDATE SET role = excluded.role`).run(Number(req.params.id), user.id, role);
+    res.status(201).json({ ...user, role });
+  });
+
+  app.delete('/api/docs/:id/shares/:userId', auth, access('owner'), (req, res) => {
+    db.prepare('DELETE FROM shares WHERE document_id = ? AND user_id = ?').run(Number(req.params.id), Number(req.params.userId));
+    res.status(204).end();
+  });
+
+  app.use('/api', (req, res) => res.status(404).json({ error: 'Not found' }));
+
+  app.use((err, req, res, next) => {
+    const status = err.status || err.statusCode || 500;
+    if (status >= 500) console.error(err);
+    res.status(status).json({ error: status >= 500 ? 'Something went wrong' : err.message });
+  });
+
+  return app;
+}

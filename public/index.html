@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Ajaia Docs</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.snow.css">
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar" id="topbar" hidden>
+    <a href="#/" class="brand">Ajaia Docs</a>
+    <span class="spacer"></span>
+    <span id="me"></span>
+    <button id="logout" class="ghost">Sign out</button>
+  </header>
+
+  <main>
+    <section id="view-login" class="card narrow" hidden>
+      <h1>Sign in to Ajaia Docs</h1>
+      <form id="login-form">
+        <label>Email <input name="email" type="email" required autocomplete="username"></label>
+        <label>Password <input name="password" type="password" required autocomplete="current-password"></label>
+        <button type="submit">Sign in</button>
+        <p class="error" id="login-error" role="alert"></p>
+      </form>
+      <p class="hint">Demo accounts (password <code>demo1234</code>):
+        <code>alice@ajaia.test</code>, <code>bob@ajaia.test</code>, <code>carol@ajaia.test</code></p>
+    </section>
+
+    <section id="view-list" hidden>
+      <div class="actions">
+        <button id="new-doc">+ New document</button>
+        <label class="button secondary">Import file
+          <input type="file" id="import-file" accept=".txt,.md,.docx" hidden>
+        </label>
+        <span class="hint">Import supports .txt, .md and .docx (max 5 MB) — creates a new editable document.</span>
+      </div>
+      <p class="error" id="list-error" role="alert"></p>
+      <h2>My documents</h2>
+      <ul class="doc-list" id="owned"></ul>
+      <h2>Shared with me</h2>
+      <ul class="doc-list" id="shared"></ul>
+    </section>
+
+    <section id="view-editor" hidden>
+      <div class="doc-header">
+        <a href="#/" class="back" aria-label="Back to documents">←</a>
+        <input id="title" aria-label="Document title" maxlength="200">
+        <span class="badge" id="role"></span>
+        <span class="status" id="status" aria-live="polite"></span>
+        <button id="share-toggle" class="secondary">Share</button>
+      </div>
+      <p class="meta" id="doc-meta"></p>
+      <div id="share-panel" class="card" hidden>
+        <form id="share-form">
+          <input name="email" type="email" placeholder="Email address" required aria-label="Email to share with">
+          <select name="role" aria-label="Access level">
+            <option value="editor">Can edit</option>
+            <option value="viewer">Can view</option>
+          </select>
+          <button type="submit">Share</button>
+        </form>
+        <p class="error" id="share-error" role="alert"></p>
+        <ul id="share-list" class="share-list"></ul>
+      </div>
+      <div class="sheet"><div id="editor"></div></div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
