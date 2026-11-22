@@ -1,27 +1,61 @@
 # Submission
 
-- **Live app:** https://ajaia-docs-9rv6.onrender.com
+- **Live app:** https://ajaia-docs-9rv6.onrender.com (free tier, so the first load after an idle period can take about 30s)
+- **Source:** https://github.com/a-korath/ajaia-docs (also included in this folder)
 - **Walkthrough video:** see `VIDEO_URL.txt`
 - **Test accounts:** `alice@ajaia.test`, `bob@ajaia.test`, `carol@ajaia.test`, all with password `demo1234`
+
+## Quick review path (about 5 min)
+
+1. Sign in as **Alice** and open "Welcome to Ajaia Docs". Edit it and try the toolbar. Changes autosave.
+2. Click **Share** and add `carol@ajaia.test` as *Can view*. Click **History** to see versions, and **Export** for Markdown or PDF.
+3. Sign out and sign in as **Carol**. The doc is under *Shared with me* and opens read-only.
+4. Sign in as **Bob**, an editor on the welcome doc, to test editing a shared doc.
+5. Back on the home page, use **Import file** with a `.txt`, `.md`, or `.docx` file to create a new document.
 
 ## Included
 
 | Path | What |
 |---|---|
-| `README.md` | Setup, run, test, deploy instructions; demo accounts |
+| `README.md` | Setup, run, test, and deploy instructions; demo accounts |
 | `ARCHITECTURE.md` | Architecture note: priorities, tradeoffs, next steps |
-| `AI_WORKFLOW.md` | AI tools used, what was changed or rejected, verification |
+| `AI_WORKFLOW.md` | AI tools used, what I changed or rejected, how I verified |
+| `SUBMISSION.md` | This file |
 | `VIDEO_URL.txt` | Walkthrough video link |
-| `server.js`, `src/` | Backend (Express + SQLite) |
+| `server.js`, `src/` | Backend (Express + libSQL: SQLite file locally, Turso in production) |
 | `public/` | Frontend (HTML/JS/CSS, Quill editor) |
-| `test/` | Automated API tests (`npm test`) |
+| `test/` | Automated API tests (`npm test`, 7 tests) |
 | `render.yaml` | Render deployment blueprint |
+| `.env.example` | Optional Turso settings for local runs |
 | `package.json`, `package-lock.json` | Dependencies |
+
+To run locally: `npm install && npm start`, then open http://localhost:3000. No accounts or services are needed.
 
 ## Status
 
-**Working end to end:** sign in/out; create, rename, edit, autosave, reopen, delete; rich text (H1–H3, bold, italic, underline, strike, lists, quotes, links); import of `.txt`/`.md`/`.docx` as new documents; sharing by email with viewer/editor roles, role changes and revoking; owned vs shared lists; save-conflict detection with a reload/overwrite choice; version history with preview and restore; export to Markdown and PDF; server-side HTML sanitization; persistence in SQLite (Turso in production).
+**Working end to end:**
+- Sign in and out.
+- Create, rename, edit, autosave, reopen, and delete documents (delete takes two clicks to confirm).
+- Rich text: H1–H3, bold, italic, underline, strikethrough, lists, quotes, links.
+- Import of `.txt`, `.md`, and `.docx` files as new documents.
+- Sharing by email with viewer or editor roles, plus changing roles and revoking access.
+- Separate lists for owned and shared documents.
+- Save-conflict detection with a reload or overwrite choice.
+- Server-side HTML sanitization.
+- Persistence that survives restarts and redeploys (Turso).
 
-**Incomplete / known limits:** no real-time co-editing (conflicts are detected and the user chooses, but nothing is merged); no sign-up; PDF export goes through the browser's print dialog; the free Render instance takes about 30s to wake after being idle.
+**Stretch features done:**
+- Version history with preview and restore.
+- Export to Markdown and PDF.
+- Role-based sharing (viewer / editor).
 
-**Next 2–4 hours:** a UI smoke test (Playwright), a diff view in history, earlier conflict notices, comments.
+**Incomplete / known limits:**
+- No real-time co-editing: conflicts are detected and the user chooses, but nothing is merged.
+- No sign-up; accounts are seeded.
+- PDF export goes through the browser's print dialog.
+
+**Next 2–4 hours:**
+- A UI smoke test (Playwright).
+- A diff view in version history.
+- Conflict notices before you type, not just on save.
+- Comments.
