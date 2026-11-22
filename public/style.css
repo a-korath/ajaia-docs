@@ -24,6 +24,7 @@ button, .button {
 button.secondary, .button.secondary { background: #fff; color: var(--accent); }
 button.ghost { background: none; border-color: transparent; color: var(--muted); }
 button.danger { background: none; border-color: transparent; color: var(--danger); padding: 4px 8px; }
+button.danger[data-armed] { background: var(--danger); color: #fff; }
 button:disabled { opacity: .5; cursor: default; }
 input, select { font: inherit; padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; }
 

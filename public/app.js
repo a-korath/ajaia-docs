@@ -198,7 +198,7 @@ async function showList() {
   const { owned, shared } = await api('/docs');
   fill($('owned'), owned, (d) => [
     el('small', { textContent: fmt(d.updated_at) }),
-    el('button', { className: 'danger', textContent: 'Delete', onclick: () => deleteDoc(d) }),
+    el('button', { className: 'danger', textContent: 'Delete', onclick: (e) => deleteDoc(d, e.currentTarget) }),
   ], 'No documents yet — create one or import a file.');
   fill($('shared'), shared, (d) => [
     el('span', { className: 'badge', textContent: ROLE_LABEL[d.role] }),
@@ -209,8 +209,17 @@ async function showList() {
   show('list');
 }
 
-async function deleteDoc(d) {
-  if (!confirm(`Delete “${d.title}”? This can’t be undone.`)) return;
+async function deleteDoc(d, btn) {
+  // First click arms the button; a second click within 3s deletes.
+  if (!btn.dataset.armed) {
+    btn.dataset.armed = '1';
+    btn.textContent = 'Sure? Click again';
+    setTimeout(() => {
+      delete btn.dataset.armed;
+      btn.textContent = 'Delete';
+    }, 3000);
+    return;
+  }
   try {
     await api(`/docs/${d.id}`, { method: 'DELETE' });
     await showList();

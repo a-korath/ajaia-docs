@@ -2,7 +2,7 @@
 
 A lightweight collaborative document editor: create, rename, and edit rich-text documents, import files, and share them with other users as viewers or editors.
 
-**Live demo:** _TODO: add Render URL_
+**Live demo:** https://ajaia-docs-9rv6.onrender.com
 
 ## Demo accounts
 
