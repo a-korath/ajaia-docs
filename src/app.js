@@ -9,6 +9,7 @@ import sanitizeHtml from 'sanitize-html';
 const MAX_TITLE = 200;
 const MAX_CONTENT = 1_000_000; // ~1 MB of HTML per document
 const IMPORT_TYPES = ['.txt', '.md', '.docx'];
+const REVISION_WINDOW_MS = 5 * 60 * 1000; // one revision per author per 5-minute editing burst
 
 const hashPassword = (pw, salt = crypto.randomBytes(16).toString('hex')) =>
   `${salt}:${crypto.scryptSync(pw, salt, 32).toString('hex')}`;
@@ -34,6 +35,12 @@ const escapeHtml = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 
 function badRequest(message) {
   return Object.assign(new Error(message), { status: 400 });
+}
+
+// Copies the document's current state into a new revision.
+function snapshot(db, docId, authorId) {
+  db.prepare(`INSERT INTO revisions (document_id, author_id, version, title, content, created_at)
+    SELECT id, ?, version, title, content, updated_at FROM documents WHERE id = ?`).run(authorId, docId);
 }
 
 function initDb(path) {
@@ -67,6 +74,16 @@ function initDb(path) {
       role TEXT NOT NULL CHECK (role IN ('viewer', 'editor')),
       PRIMARY KEY (document_id, user_id)
     );
+    CREATE TABLE IF NOT EXISTS revisions (
+      id INTEGER PRIMARY KEY,
+      document_id INTEGER NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+      author_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      version INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS revisions_by_doc ON revisions (document_id, id);
   `);
 
   // Seed demo accounts on first boot so reviewers can test sharing immediately.
@@ -80,6 +97,7 @@ function initDb(path) {
       'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (1, ?, ?, ?, ?)'
     ).run('Welcome to Ajaia Docs', '<h1>Welcome</h1><p>This document is owned by <strong>Alice</strong> and shared with Bob as an <em>editor</em>.</p><ul><li>Edit anything — changes autosave.</li><li>Use the toolbar for headings, lists and formatting.</li></ul>', now, now);
     db.prepare("INSERT INTO shares (document_id, user_id, role) VALUES (?, 2, 'editor')").run(lastInsertRowid);
+    snapshot(db, lastInsertRowid, 1);
   }
   return db;
 }
@@ -130,7 +148,21 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
     const { lastInsertRowid } = db.prepare(
       'INSERT INTO documents (owner_id, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?)'
     ).run(ownerId, title, content, now, now);
+    snapshot(db, lastInsertRowid, ownerId);
     return { id: Number(lastInsertRowid), title };
+  }
+
+  // Autosave fires every second while typing, so consecutive saves by the same author within
+  // REVISION_WINDOW_MS update one revision instead of creating many. The creation revision
+  // (version 1) is never merged, so the original/imported text is always restorable.
+  function recordRevision(docId, authorId, savedAt) {
+    const last = db.prepare('SELECT id, author_id, version, created_at FROM revisions WHERE document_id = ? ORDER BY id DESC LIMIT 1').get(docId);
+    if (last && last.version > 1 && last.author_id === authorId && Date.parse(savedAt) - Date.parse(last.created_at) < REVISION_WINDOW_MS) {
+      db.prepare(`UPDATE revisions SET (version, title, content) = (SELECT version, title, content FROM documents WHERE id = ?)
+        WHERE id = ?`).run(docId, last.id);
+    } else {
+      snapshot(db, docId, authorId);
+    }
   }
 
   // --- auth ---
@@ -223,12 +255,28 @@ export function createApp(dbPath = process.env.DB_PATH || 'data.db') {
       const latest = db.prepare('SELECT title, content, version, updated_at FROM documents WHERE id = ?').get(id);
       return res.status(409).json({ error: 'This document was changed by someone else', latest });
     }
+    recordRevision(id, req.user.id, updates.updated_at);
     res.json({ version: version + 1, updated_at: updates.updated_at });
   });
 
   app.delete('/api/docs/:id', auth, access('owner'), (req, res) => {
     db.prepare('DELETE FROM documents WHERE id = ?').run(Number(req.params.id));
     res.status(204).end();
+  });
+
+  // --- version history ---
+  app.get('/api/docs/:id/revisions', auth, access('owner', 'editor', 'viewer'), (req, res) => {
+    res.json(db.prepare(`
+      SELECT r.id, r.version, r.title, r.created_at, u.name AS author_name
+      FROM revisions r JOIN users u ON u.id = r.author_id
+      WHERE r.document_id = ? ORDER BY r.id DESC LIMIT 100`).all(Number(req.params.id)));
+  });
+
+  app.get('/api/docs/:id/revisions/:revId', auth, access('owner', 'editor', 'viewer'), (req, res) => {
+    const rev = db.prepare('SELECT id, version, title, content, created_at FROM revisions WHERE id = ? AND document_id = ?')
+      .get(Number(req.params.revId), Number(req.params.id));
+    if (!rev) return res.status(404).json({ error: 'Revision not found' });
+    res.json(rev);
   });
 
   // --- sharing ---

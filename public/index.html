@@ -48,6 +48,7 @@
         <input id="title" aria-label="Document title" maxlength="200">
         <span class="badge" id="role"></span>
         <span class="status" id="status" aria-live="polite"></span>
+        <button id="history-toggle" class="secondary">History</button>
         <button id="share-toggle" class="secondary">Share</button>
       </div>
       <p class="meta" id="doc-meta"></p>
@@ -67,6 +68,16 @@
         </form>
         <p class="error" id="share-error" role="alert"></p>
         <ul id="share-list" class="share-list"></ul>
+      </div>
+      <div id="history-panel" class="card history" hidden>
+        <ul id="history-list" class="history-list" aria-label="Versions"></ul>
+        <div class="history-preview">
+          <div class="history-bar">
+            <span id="history-label">Select a version to preview</span>
+            <button id="history-restore" hidden>Restore this version</button>
+          </div>
+          <div id="history-preview"></div>
+        </div>
       </div>
       <div class="sheet"><div id="editor"></div></div>
     </section>

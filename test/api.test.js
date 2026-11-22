@@ -130,3 +130,28 @@ test('strips unsafe HTML on save and import, keeps formatting', async () => {
   assert.match(imported, /<h1>T<\/h1>/);
   assert.doesNotMatch(imported, /script/);
 });
+
+test('records version history: original kept, autosave bursts merged, one entry per author', async () => {
+  const alice = await login('alice@ajaia.test');
+  const bob = await login('bob@ajaia.test');
+  const carol = await login('carol@ajaia.test');
+  const { body: doc } = await alice.call('/docs', 'POST', { title: 'History' });
+  await alice.call(`/docs/${doc.id}/shares`, 'POST', { email: 'bob@ajaia.test', role: 'editor' });
+
+  // Three quick autosaves by Alice collapse into one revision on top of the creation revision.
+  for (const [i, text] of ['a', 'ab', 'abc'].entries()) {
+    await alice.call(`/docs/${doc.id}`, 'PATCH', { content: `<p>${text}</p>`, version: i + 1 });
+  }
+  await bob.call(`/docs/${doc.id}`, 'PATCH', { content: '<p>bob</p>', version: 4 });
+
+  const revs = (await alice.call(`/docs/${doc.id}/revisions`)).body;
+  assert.deepEqual(revs.map((r) => [r.author_name, r.version]), [['Bob', 5], ['Alice', 4], ['Alice', 1]]);
+
+  const original = await bob.call(`/docs/${doc.id}/revisions/${revs[2].id}`);
+  assert.equal(original.body.content, '');
+  assert.equal((await alice.call(`/docs/${doc.id}/revisions/${revs[1].id}`)).body.content, '<p>abc</p>');
+
+  // History follows document access.
+  assert.equal((await carol.call(`/docs/${doc.id}/revisions`)).status, 404);
+  assert.equal((await carol.call(`/docs/${doc.id}/revisions/${revs[0].id}`)).status, 404);
+});

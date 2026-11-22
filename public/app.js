@@ -53,6 +53,8 @@ const quill = new Quill('#editor', {
   },
 });
 const toolbar = quill.getModule('toolbar').container;
+const preview = new Quill('#history-preview', { theme: 'snow', readOnly: true, modules: { toolbar: false } });
+let selectedRev = null;
 
 function setStatus(text, failed = false) {
   $('status').textContent = text;
@@ -133,6 +135,7 @@ async function openDoc(id, { focusTitle = false } = {}) {
   $('role').textContent = ROLE_LABEL[doc.role];
   $('share-toggle').hidden = doc.role !== 'owner';
   $('share-panel').hidden = true;
+  $('history-panel').hidden = true;
   $('share-error').textContent = '';
   setStatus(readOnly ? 'You can view but not edit this document' : 'All changes saved');
   renderShares();
@@ -179,7 +182,60 @@ async function unshare(s) {
   }
 }
 
-$('share-toggle').onclick = () => { $('share-panel').hidden = !$('share-panel').hidden; };
+$('share-toggle').onclick = () => {
+  $('share-panel').hidden = !$('share-panel').hidden;
+  $('history-panel').hidden = true;
+};
+
+// --- version history ---
+async function loadHistory() {
+  await save(); // so the newest edits show up as the current version
+  selectedRev = null;
+  $('history-restore').hidden = true;
+  $('history-label').textContent = 'Select a version to preview';
+  preview.setContents([], 'silent');
+  preview.container.hidden = true;
+  try {
+    const revs = await api(`/docs/${current.id}/revisions`);
+    $('history-list').replaceChildren(...revs.map((r, i) => {
+      const tags = [r.author_name, i === 0 && 'Current', r.version === 1 && 'Created'].filter(Boolean).join(' · ');
+      return el('li', {}, el('button', { onclick: (e) => previewRev(r, e.currentTarget) },
+        el('strong', { textContent: fmt(r.created_at) }),
+        el('span', { textContent: tags })));
+    }));
+  } catch (err) {
+    $('history-label').textContent = err.message;
+  }
+}
+
+async function previewRev(r, btn) {
+  try {
+    const rev = await api(`/docs/${current.id}/revisions/${r.id}`);
+    selectedRev = rev;
+    for (const b of $('history-list').querySelectorAll('button')) b.classList.toggle('active', b === btn);
+    preview.setContents(preview.clipboard.convert({ html: rev.content }), 'silent');
+    preview.container.hidden = false;
+    $('history-label').textContent = `“${rev.title}” · ${fmt(rev.created_at)}`;
+    $('history-restore').hidden = current.role === 'viewer' || rev.version === current.version;
+  } catch (err) {
+    $('history-label').textContent = err.message;
+  }
+}
+
+// Restoring saves the old content as a new version, so a restore is itself undoable from history.
+$('history-restore').onclick = async () => {
+  quill.setContents(quill.clipboard.convert({ html: selectedRev.content }), 'silent');
+  $('title').value = selectedRev.title;
+  dirty = true;
+  await save();
+  if (!dirty) loadHistory();
+};
+
+$('history-toggle').onclick = () => {
+  $('history-panel').hidden = !$('history-panel').hidden;
+  $('share-panel').hidden = true;
+  if (!$('history-panel').hidden) loadHistory();
+};
 $('share-form').onsubmit = async (e) => {
   e.preventDefault();
   const f = e.target;
