@@ -61,6 +61,14 @@ h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 28px 0 8px;
 
 #share-panel { margin-bottom: 12px; }
 
+.menu { position: relative; }
+.menu summary { list-style: none; }
+.menu summary::-webkit-details-marker { display: none; }
+.menu-items { position: absolute; right: 0; top: calc(100% + 4px); z-index: 2; display: grid; min-width: 220px; padding: 4px;
+  background: #fff; border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 4px 16px rgb(0 0 0 / .12); }
+.menu-items button { background: none; border: 0; color: var(--fg); text-align: left; padding: 8px 10px; border-radius: 6px; white-space: nowrap; }
+.menu-items button:hover { background: #e8f0fe; }
+
 .history { display: grid; grid-template-columns: 220px 1fr; gap: 16px; margin-bottom: 12px; }
 .history-list { list-style: none; padding: 0; margin: 0; max-height: 380px; overflow-y: auto; border-right: 1px solid var(--line); }
 .history-list button { display: grid; width: 100%; text-align: left; gap: 2px; background: none; border: 0; border-radius: 6px;
@@ -87,3 +95,11 @@ h2 { font-size: 15px; color: var(--muted); font-weight: 600; margin: 28px 0 8px;
 .sheet .ql-container { border: 0; font-size: 16px; }
 .sheet .ql-editor { min-height: 60vh; padding: 40px 56px; line-height: 1.6; }
 @media (max-width: 600px) { .sheet .ql-editor { padding: 20px 16px; } }
+
+/* Export to PDF uses the browser's print dialog: print only the document body. */
+@media print {
+  body, main { background: #fff; margin: 0; padding: 0; max-width: none; }
+  .topbar, .doc-header, .meta, .conflict, #share-panel, #history-panel, .ql-toolbar { display: none !important; }
+  .sheet { border: 0; }
+  .sheet .ql-editor { min-height: 0; padding: 0; }
+}

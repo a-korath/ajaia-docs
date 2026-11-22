@@ -49,6 +49,13 @@
         <span class="badge" id="role"></span>
         <span class="status" id="status" aria-live="polite"></span>
         <button id="history-toggle" class="secondary">History</button>
+        <details class="menu" id="export-menu">
+          <summary class="button secondary">Export</summary>
+          <div class="menu-items">
+            <button id="export-md">Markdown (.md)</button>
+            <button id="export-pdf">PDF (print → Save as PDF)</button>
+          </div>
+        </details>
         <button id="share-toggle" class="secondary">Share</button>
       </div>
       <p class="meta" id="doc-meta"></p>
@@ -84,6 +91,7 @@
   </main>
 
   <script src="https://cdn.jsdelivr.net/npm/quill@2.0.3/dist/quill.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/turndown@7.2.0/dist/turndown.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

@@ -187,6 +187,33 @@ $('share-toggle').onclick = () => {
   $('history-panel').hidden = true;
 };
 
+// --- export ---
+const safeFilename = (title) => title.replace(/[\\/:*?"<>|]+/g, '-').trim() || 'document';
+
+$('export-md').onclick = () => {
+  $('export-menu').open = false;
+  // getSemanticHTML turns Quill's internal list markup into real <ul>/<ol> for clean Markdown.
+  const md = new TurndownService({ headingStyle: 'atx', bulletListMarker: '-' }).turndown(quill.getSemanticHTML());
+  const a = el('a', {
+    href: URL.createObjectURL(new Blob([`${md}\n`], { type: 'text/markdown' })),
+    download: `${safeFilename(current.title)}.md`,
+  });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+};
+
+document.addEventListener('click', (e) => {
+  if (!$('export-menu').contains(e.target)) $('export-menu').open = false;
+});
+
+$('export-pdf').onclick = () => {
+  $('export-menu').open = false;
+  const pageTitle = document.title;
+  document.title = current.title; // browsers use this as the default PDF filename
+  window.print();
+  document.title = pageTitle;
+};
+
 // --- version history ---
 async function loadHistory() {
   await save(); // so the newest edits show up as the current version

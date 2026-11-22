@@ -20,8 +20,8 @@
 
 ## Status
 
-**Working end to end:** sign in/out; create, rename, edit, autosave, reopen, delete; rich text (H1–H3, bold, italic, underline, strike, lists, quotes, links); import of `.txt`/`.md`/`.docx` as new documents; sharing by email with viewer/editor roles, role changes and revoking; owned vs shared lists; save-conflict detection with a reload/overwrite choice; server-side HTML sanitization; SQLite persistence.
+**Working end to end:** sign in/out; create, rename, edit, autosave, reopen, delete; rich text (H1–H3, bold, italic, underline, strike, lists, quotes, links); import of `.txt`/`.md`/`.docx` as new documents; sharing by email with viewer/editor roles, role changes and revoking; owned vs shared lists; save-conflict detection with a reload/overwrite choice; version history with preview and restore; export to Markdown and PDF; server-side HTML sanitization; persistence in SQLite (Turso in production).
 
-**Incomplete / known limits:** no real-time co-editing (conflicts are detected and the user chooses, but nothing is merged); no sign-up; data on the free Render instance resets on redeploy or idle restart.
+**Incomplete / known limits:** no real-time co-editing (conflicts are detected and the user chooses, but nothing is merged); no sign-up; PDF export goes through the browser's print dialog; the free Render instance takes about 30s to wake after being idle.
 
-**Next 2–4 hours:** earlier conflict notices (polling or push), Markdown/PDF export, persistent production storage, a UI smoke test.
+**Next 2–4 hours:** a UI smoke test (Playwright), a diff view in history, earlier conflict notices, comments.

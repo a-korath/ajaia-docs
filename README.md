@@ -23,12 +23,14 @@ All passwords are `demo1234`.
 - **File import:** `.txt`, `.md`, and `.docx` files up to 5 MB. Each import becomes a new editable document, titled with the file name. Markdown and Word headings, lists, and emphasis carry over. Other file types are rejected with a clear message.
 - **Sharing:** the owner grants access by email with a role: **Can edit** or **Can view**. The owner can also change a role or revoke access. The home page splits documents into *My documents* and *Shared with me*, showing the owner and your role.
 - **Conflict detection:** if two people edit the same document and one saves first, the other sees a warning with *Load their version* or *Overwrite with mine*, instead of silently overwriting.
+- **Version history:** **History** lists past versions, one entry per author per 5-minute editing burst, plus the original. You can preview any version read-only, and editors can **Restore** it. A restore saves as a new version, so it can be undone too.
+- **Export:** **Export → Markdown** downloads a `.md` file. **Export → PDF** opens the print dialog with a clean, document-only layout; choose *Save as PDF*.
 - **Safe content:** HTML is sanitized on the server on every save and import.
-- **Persistence:** everything lives in SQLite (users, sessions, documents, shares). Document content is stored as HTML.
+- **Persistence:** SQLite through libSQL. In development it's a local file; in production it's [Turso](https://turso.tech), a free hosted SQLite service, so data survives restarts and redeploys. Document content is stored as HTML.
 
 ## Run locally
 
-Needs Node **22.13+** for the built-in `node:sqlite` module. There are no native deps and no other services.
+Needs Node **22.13+**. No other services are needed locally.
 
 ```bash
 npm install
@@ -36,21 +38,23 @@ npm start          # http://localhost:3000
 npm test           # API tests (node:test)
 ```
 
-The database file is `data.db` in the project root by default. Override it with `DB_PATH=/path/to/file.db`. Delete the file to reset to the seed data. The port is set with `PORT`.
+The database is a local SQLite file, `data.db`, in the project root by default. Override it with `DB_PATH=/path/to/file.db`, and delete the file to reset to the seed data. To use Turso instead, set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. The port is set with `PORT`.
 
 ## Deploy
 
-`render.yaml` deploys to Render's free tier: **New → Blueprint** → pick the repo. No env vars are needed.
+`render.yaml` deploys to Render's free tier: **New → Blueprint** → pick the repo.
 
-> ⚠️ Render's free tier has no persistent disk, so the database resets to the seed data whenever the service redeploys or restarts after idling. Data does persist across refreshes and sessions while the instance is up. For durable data, attach a Render disk and set `DB_PATH` to a file on it, or move to Postgres. See [ARCHITECTURE.md](ARCHITECTURE.md).
+For durable data, create a free Turso database and set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN` in the Render service's environment. The schema and demo data are created automatically on first boot. Without these variables, the app falls back to a local file, which Render's free tier wipes on every restart.
+
+The free Render instance sleeps when idle, so the first request after a break takes about 30 seconds.
 
 ## Project layout
 
 ```
 server.js          entry point
-src/app.js         Express app: schema + seed, auth, documents, import, sharing
-public/            static frontend (index.html, app.js, style.css). No build step; Quill comes from a CDN
-test/api.test.js   API tests: access control, validation, import
+src/app.js         Express app: schema + seed, auth, documents, import, sharing, history
+public/            static frontend (index.html, app.js, style.css). No build step; Quill and Turndown come from a CDN
+test/api.test.js   API tests: access control, validation, import, conflicts, sanitization, history
 ```
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for decisions and tradeoffs, and [AI_WORKFLOW.md](AI_WORKFLOW.md) for how AI tools were used.
