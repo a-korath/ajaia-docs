@@ -258,6 +258,7 @@ $('history-restore').onclick = async () => {
   if (!dirty) loadHistory();
 };
 
+$('history-close').onclick = () => { $('history-panel').hidden = true; };
 $('history-toggle').onclick = () => {
   $('history-panel').hidden = !$('history-panel').hidden;
   $('share-panel').hidden = true;

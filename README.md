@@ -38,7 +38,7 @@ npm start          # http://localhost:3000
 npm test           # API tests (node:test)
 ```
 
-The database is a local SQLite file, `data.db`, in the project root by default. Override it with `DB_PATH=/path/to/file.db`, and delete the file to reset to the seed data. To use Turso instead, set `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. The port is set with `PORT`.
+The database is a local SQLite file, `data.db`, in the project root by default. Override it with `DB_PATH=/path/to/file.db`, and delete the file to reset to the seed data. To use Turso instead, copy `.env.example` to `.env` and fill in `TURSO_DATABASE_URL` and `TURSO_AUTH_TOKEN`. `npm start` loads `.env` automatically, and git ignores it. The port is set with `PORT`.
 
 ## Deploy
 

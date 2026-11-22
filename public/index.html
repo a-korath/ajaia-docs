@@ -76,17 +76,21 @@
         <p class="error" id="share-error" role="alert"></p>
         <ul id="share-list" class="share-list"></ul>
       </div>
-      <div id="history-panel" class="card history" hidden>
-        <ul id="history-list" class="history-list" aria-label="Versions"></ul>
-        <div class="history-preview">
+      <div class="editor-row">
+        <div class="sheet"><div id="editor"></div></div>
+        <aside id="history-panel" class="card history" aria-label="Version history" hidden>
+          <div class="history-head">
+            <strong>Version history</strong>
+            <button id="history-close" class="ghost" aria-label="Close version history">✕</button>
+          </div>
+          <ul id="history-list" class="history-list" aria-label="Versions"></ul>
           <div class="history-bar">
             <span id="history-label">Select a version to preview</span>
-            <button id="history-restore" hidden>Restore this version</button>
+            <button id="history-restore" hidden>Restore</button>
           </div>
           <div id="history-preview"></div>
-        </div>
+        </aside>
       </div>
-      <div class="sheet"><div id="editor"></div></div>
     </section>
   </main>
 
